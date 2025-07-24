@@ -353,8 +353,8 @@
 		{/if}
 	{:else if token.type === 'space'}
 		<div class="my-2" />
-  {:else if token.type === 'ssml'}
-    <SsmlRenderer content={token.raw} />
+	{:else if token.type === 'ssml'}
+		<SsmlRenderer content={token.raw} {done} />
 	{:else}
 		{console.log('Unknown token', token)}
 	{/if}

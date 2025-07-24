@@ -35,6 +35,9 @@
 	let voices = [];
 	let voice = '';
 
+	let showSSML = false;
+	let autoplaySSML = false;
+
 	// Audio speed control
 	let playbackRate = 1;
 
@@ -84,6 +87,16 @@
 		saveSettings({ speechAutoSend: speechAutoSend });
 	};
 
+	const toggleShowSSML = async () => {
+		showSSML = !showSSML;
+		saveSettings({ audio: { ssml: { show: showSSML } } });
+	};
+
+	const toggleAutoplaySSML = async () => {
+		autoplaySSML = !autoplaySSML;
+		saveSettings({ audio: { ssml: { autoplay: autoplaySSML } } });
+	};
+
 	onMount(async () => {
 		playbackRate = $settings.audio?.tts?.playbackRate ?? 1;
 		conversationMode = $settings.conversationMode ?? false;
@@ -103,6 +116,9 @@
 		}
 
 		nonLocalVoices = $settings.audio?.tts?.nonLocalVoices ?? false;
+
+		showSSML = $settings?.audio?.ssml?.show ?? true;
+		autoplaySSML = $settings?.audio?.ssml?.autoplay ?? false;
 
 		await getVoices();
 	});
@@ -170,6 +186,10 @@
 					voice: voice !== '' ? voice : undefined,
 					defaultVoice: $config?.audio?.tts?.voice ?? '',
 					nonLocalVoices: $config.audio.tts.engine === '' ? nonLocalVoices : undefined
+				},
+				ssml: {
+					show: showSSML,
+					autoplay: autoplaySSML
 				}
 			}
 		});
@@ -399,6 +419,48 @@
 				</div>
 			</div>
 		{/if}
+	</div>
+
+	<hr class=" border-gray-100 dark:border-gray-850" />
+
+	<div>
+		<div class=" mb-1 text-sm font-medium">{$i18n.t('SSML Settings')}</div>
+
+		<div class=" py-0.5 flex w-full justify-between">
+			<div class=" self-center text-xs font-medium">{$i18n.t('Show SSML blocks')}</div>
+
+			<button
+				class="p-1 px-3 text-xs flex rounded-sm transition"
+				on:click={() => {
+					toggleShowSSML();
+				}}
+				type="button"
+			>
+				{#if showSSML === true}
+					<span class="ml-2 self-center">{$i18n.t('On')}</span>
+				{:else}
+					<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+				{/if}
+			</button>
+		</div>
+
+		<div class=" py-0.5 flex w-full justify-between">
+			<div class=" self-center text-xs font-medium">{$i18n.t('Auto-play SSML blocks')}</div>
+
+			<button
+				class="p-1 px-3 text-xs flex rounded-sm transition"
+				on:click={() => {
+					toggleAutoplaySSML();
+				}}
+				type="button"
+			>
+				{#if autoplaySSML === true}
+					<span class="ml-2 self-center">{$i18n.t('On')}</span>
+				{:else}
+					<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+				{/if}
+			</button>
+		</div>
 	</div>
 
 	<div class="flex justify-end text-sm font-medium">
