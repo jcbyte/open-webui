@@ -1,22 +1,19 @@
 <script lang="ts">
-	import { toast } from 'svelte-sonner';
-
 	import type { i18n as i18nType } from 'i18next';
 	import { getContext } from 'svelte';
-	import type { Writable } from 'svelte/store';
+	import { type Writable } from 'svelte/store';
 
 	const i18n = getContext<Writable<i18nType>>('i18n');
 
-	import { synthesizeOpenAISpeech } from '$lib/apis/audio';
-	import { config, settings, TTSWorker } from '$lib/stores';
-	import { getMessageContentParts } from '$lib/utils';
+	import { settings } from '$lib/stores';
 
-	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 	import VoiceVisualiser from './VoiceVisualiser.svelte';
 
+	import { TTSElement, TTSManager } from '$lib/utils/tts';
+
 	export let content: string;
-	const strippedContent = content.replace(/<[^>]*>/g, '');
-	const formattedContent = strippedContent
+	const formattedContent = content
+		.replace(/<[^>]*>/g, '')
 		.replace(/\s*\n\s*|\s+/g, ' ')
 		.replace(/\s+([.,!?;:])/g, '$1')
 		.replace(/([.,!?;:])(?=\S)/g, '$1 ')
@@ -24,194 +21,43 @@
 
 	export let done: boolean;
 
-	let showingTranscript = false;
+	const tts = new TTSElement(content, true);
 
+	let queuedSpeech = false;
 	let loadingSpeech = false;
 	let speaking = false;
 
-	let audioParts: Record<number, HTMLAudioElement | null> = {};
-	let speakingIdx: number | undefined;
-	let speakingAudio: HTMLAudioElement | undefined;
-
-	const playAudio = (idx: number) => {
-		return new Promise<void>((res) => {
-			speakingIdx = idx;
-			const audio = audioParts[idx];
-
-			if (!audio) {
-				return res();
-			}
-
-			audio.play();
-			audio.onended = async () => {
-				await new Promise((r) => setTimeout(r, 300));
-
-				if (Object.keys(audioParts).length - 1 === idx) {
-					speaking = false;
-				}
-
-				res();
-			};
-		});
+	tts.onLoading = () => {
+		queuedSpeech = false;
+		loadingSpeech = true;
 	};
-
-	const toggleSpeakMessage = async () => {
-		if (speaking) {
-			try {
-				speechSynthesis.cancel();
-
-				if (speakingAudio !== undefined) {
-					speakingAudio.pause();
-					speakingAudio.currentTime = 0;
-				}
-
-				if (speakingIdx !== undefined && audioParts[speakingIdx]) {
-					audioParts[speakingIdx]!.pause();
-					audioParts[speakingIdx]!.currentTime = 0;
-				}
-			} catch {}
-
-			speaking = false;
-			speakingIdx = undefined;
-			return;
-		}
-
-		if (!(content ?? '').trim().length) {
-			toast.info($i18n.t('No content to speak'));
-			return;
-		}
-
+	tts.onSpeaking = () => {
+		loadingSpeech = false;
 		speaking = true;
-
-		if ($config.audio.tts.engine === '') {
-			let voices = [];
-			const getVoicesLoop = setInterval(() => {
-				voices = speechSynthesis.getVoices();
-				if (voices.length > 0) {
-					clearInterval(getVoicesLoop);
-
-					const voice =
-						voices
-							?.filter(
-								(v) => v.voiceURI === ($settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice)
-							)
-							?.at(0) ?? undefined;
-
-					console.log(voice);
-
-					// Browser does not support SSML so use stripped
-					const speak = new SpeechSynthesisUtterance(strippedContent);
-					speak.rate = $settings.audio?.tts?.playbackRate ?? 1;
-
-					console.log(speak);
-
-					speak.onend = () => {
-						speaking = false;
-					};
-
-					if (voice) {
-						speak.voice = voice;
-					}
-
-					speechSynthesis.speak(speak);
-				}
-			}, 100);
-		} else {
-			loadingSpeech = true;
-			let lastPlayedAudioPromise = Promise.resolve(); // Initialize a promise that resolves immediately
-
-			if ($settings.audio?.tts?.engine === 'browser-kokoro') {
-				const messageContentParts: string[] = getMessageContentParts(
-					strippedContent, // Kokoro does not support SSML so use stripped
-					$config?.audio?.tts?.split_on ?? 'punctuation'
-				);
-
-				if (!messageContentParts.length) {
-					console.log('No content to speak');
-					toast.info($i18n.t('No content to speak'));
-
-					speaking = false;
-					loadingSpeech = false;
-					return;
-				}
-
-				console.debug('Prepared message content for TTS', messageContentParts);
-
-				audioParts = messageContentParts.reduce(
-					(acc, _sentence, idx) => {
-						acc[idx] = null;
-						return acc;
-					},
-					{} as typeof audioParts
-				);
-
-				if (!$TTSWorker) {
-					await TTSWorker.set(
-						new KokoroWorker({
-							dtype: $settings.audio?.tts?.engineConfig?.dtype ?? 'fp32'
-						})
-					);
-
-					await $TTSWorker.init();
-				}
-
-				for (const [idx, sentence] of messageContentParts.entries()) {
-					const blob = await $TTSWorker
-						.generate({
-							text: sentence,
-							voice: $settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice
-						})
-						.catch((error) => {
-							console.error(error);
-							toast.error(`${error}`);
-
-							speaking = false;
-							loadingSpeech = false;
-						});
-
-					if (blob) {
-						const audio = new Audio(blob);
-						audio.playbackRate = $settings.audio?.tts?.playbackRate ?? 1;
-
-						audioParts[idx] = audio;
-						loadingSpeech = false;
-						lastPlayedAudioPromise = lastPlayedAudioPromise.then(() => playAudio(idx));
-					}
-				}
-			} else {
-				const res = await synthesizeOpenAISpeech(
-					localStorage.token,
-					$settings?.audio?.tts?.defaultVoice === $config.audio.tts.voice
-						? ($settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice)
-						: $config?.audio?.tts?.voice,
-					content,
-					undefined,
-					true
-				).catch((error) => {
-					console.error(error);
-					toast.error(`${error}`);
-
-					speaking = false;
-					loadingSpeech = false;
-				});
-
-				if (res) {
-					const blob = await res.blob();
-					const blobUrl = URL.createObjectURL(blob);
-					const audio = new Audio(blobUrl);
-					audio.playbackRate = $settings.audio?.tts?.playbackRate ?? 1;
-
-					speakingAudio = audio;
-					loadingSpeech = false;
-
-					speakingAudio.play();
-					speakingAudio.onended = () => {
-						speaking = false;
-					};
-				}
-			}
-		}
 	};
+	tts.onFinish = () => {
+		speaking = false;
+	};
+	tts.onCancel = () => {
+		queuedSpeech = false;
+		loadingSpeech = false;
+		speaking = false;
+	};
+
+	const toggleSpeakMessage = () => {
+		console.log(queuedSpeech, loadingSpeech, speaking);
+
+		if (queuedSpeech || loadingSpeech || speaking) {
+			console.log('aa');
+			TTSManager.cancel(tts);
+			return;
+		}
+
+		queuedSpeech = true;
+		TTSManager.queue(tts);
+	};
+
+	let showingTranscript = false;
 
 	if (($settings?.audio?.ssml?.autoplay ?? false) && !done) {
 		toggleSpeakMessage();
@@ -223,14 +69,22 @@
 		<button
 			class="visible p-1.5 w-fit hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition"
 			aria-label={$i18n.t('Read Aloud')}
-			on:click={() => {
-				if (!loadingSpeech) {
-					toggleSpeakMessage();
-				}
-			}}
+			on:click={toggleSpeakMessage}
 		>
 			<div class="flex flex-row items-center gap-1.5">
-				{#if loadingSpeech}
+				{#if queuedSpeech}
+					<svg
+						fill="none"
+						viewBox="0 0 24 24"
+						aria-hidden="true"
+						stroke-width="2.3"
+						stroke="currentColor"
+						class="w-4 h-4"
+					>
+						<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2" />
+						<circle cx="12" cy="12" r="10" />
+					</svg>
+				{:else if loadingSpeech}
 					<svg
 						class=" w-4 h-4"
 						fill="currentColor"
